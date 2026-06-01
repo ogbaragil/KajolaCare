@@ -247,6 +247,21 @@ const emptyLine = () => { const item = DEFAULT_PRICING_ITEMS[0]; return { id: ma
 const emptyInvoice = () => ({ clientId: '', dueDate: addDaysISO(7), notes: '', lines: [emptyLine()] });
 const emptyTxn = { clientId: '', type: 'expense', status: 'pending', category: '', description: '', amount: '', date: todayISO() };
 const emptyWorker = () => Object.fromEntries([['id', makeId('worker')], ['name', ''], ['role', ''], ['email', ''], ['phone', ''], ['employeeUsername', ''], ['employeePasswordHash', ''], ['temporaryPassword', ''], ['mustChangePassword', false], ['loginEnabled', true], ['lastPasswordResetAt', ''], ['notes', ''], ...DEFAULT_WORKER_COMPLIANCE_ITEMS.map(item => [item.key, ''])]);
+
+const parseShiftStartMs = (shift) => {
+  if (!shift?.date || !shift?.startTime) return NaN;
+  const ms = new Date(`${shift.date}T${shift.startTime}`).getTime();
+  return Number.isNaN(ms) ? NaN : ms;
+};
+const canStartShiftNow = (shift, nowMs = Date.now()) => {
+  const startMs = parseShiftStartMs(shift);
+  if (Number.isNaN(startMs)) return { ok: false, reason: 'Shift start time is missing.' };
+  const diff = startMs - nowMs;
+  const sixHours = 6 * 60 * 60 * 1000;
+  if (diff > sixHours) return { ok: false, reason: `Start opens 6 hours before shift commencement. Available from ${fmtMelbourneDateTime(new Date(startMs - sixHours).toISOString())}.` };
+  return { ok: true, reason: 'Start available.' };
+};
+
 const emptyShift = () => ({ id: makeId('shift'), workerId: '', participantId: '', date: todayISO(), startTime: '09:00', endTime: '11:00', location: '', supportType: 'Personal care', status: 'Scheduled', startedAt: '', endedAt: '', notes: '', adminNotes: '' });
 const INVOICE_STATUSES = ['Draft', 'Pending', 'Paid', 'Cancelled'];
 const BUSINESS_TXN_CLIENT_ID = '__business__';
@@ -2762,11 +2777,20 @@ function WorkerPortal({ user, employeeSession, business, worker, workers = [], c
     }
     return { ok: true };
   };
-  const startShift = (shift) => patchShift(shift.id, { status: 'In Progress', startedAt: shift.startedAt || new Date().toISOString(), viewedAt: shift.viewedAt || new Date().toISOString() });
-  const endShift = (shift) => patchShift(shift.id, { status: 'Awaiting Notes', endedAt: new Date().toISOString() });
+  const startShift = (shift) => {
+    const availability = canStartShiftNow(shift, Date.now());
+    if (!availability.ok) return alert(availability.reason);
+    if (!window.confirm('Confirm shift start? This will record your clock-in time in Melbourne time.')) return Promise.resolve({ ok: false, cancelled: true });
+    return patchShift(shift.id, { status: 'In Progress', startedAt: shift.startedAt || new Date().toISOString(), viewedAt: shift.viewedAt || new Date().toISOString() });
+  };
+  const endShift = (shift) => {
+    if (!window.confirm('Confirm shift end? This will record your clock-out time in Melbourne time and move the shift to notes completion.')) return Promise.resolve({ ok: false, cancelled: true });
+    return patchShift(shift.id, { status: 'Awaiting Notes', endedAt: new Date().toISOString() });
+  };
   const saveNotes = (shift, payload) => patchShift(shift.id, payload);
   const inProgress = workerShifts.filter(s => s.status === 'In Progress').length;
   const completed = workerShifts.filter(s => s.status === 'Completed').length;
+  const nextShiftStart = nextShift ? canStartShiftNow(nextShift, now) : { ok: false, reason: '' };
 
   return <div className="worker-shell">
     <header className="worker-top">
@@ -2780,7 +2804,7 @@ function WorkerPortal({ user, employeeSession, business, worker, workers = [], c
       </section>
       {nextShift && <section className="worker-next-shift">
         <div><small>{nextShift.date === today ? "Today's shift" : 'Next shift'}</small><h2>{findClient(nextShift.participantId)?.name || nextShift.participantName || 'Assigned participant'}</h2><p>{fmt(nextShift.date)} · {nextShift.startTime || '--:--'}–{nextShift.endTime || '--:--'} · {nextShift.supportType || 'Support shift'}</p>{nextShift.recurrenceLabel && <span className="recurring-badge">Recurring: {nextShift.recurrenceLabel}</span>}</div>
-        <button className="primary" disabled={getDisplayStatus(nextShift) !== 'Scheduled'} onClick={() => startShift(nextShift)}>Start Shift</button>
+        <button className="primary" disabled={getDisplayStatus(nextShift) !== 'Scheduled' || !nextShiftStart.ok} title={nextShiftStart.reason} onClick={() => startShift(nextShift)}>{nextShiftStart.ok ? 'Start Shift' : 'Start Locked'}</button>
       </section>}
       <section className="worker-summary-grid">
         <div><small>Today</small><b>{todayShifts.length}</b></div>
@@ -2790,7 +2814,13 @@ function WorkerPortal({ user, employeeSession, business, worker, workers = [], c
       {!matchedWorker && <div className="worker-notice"><b>Employee Profile Not Found</b><span>Your account is not yet linked to an employee record. Ask an admin to create or enable your employee username under Compliance &gt; Employees before assigning shifts.</span></div>}
       {matchedWorker && workerShifts.length === 0 && <div className="worker-notice"><b>No assigned shifts yet</b><span>Your employee profile is active, but no client shifts have been assigned to you yet.</span></div>}
       {portalMessage && <div className="worker-notice"><b>Sync notice</b><span>{portalMessage}</span></div>}
-      <div className="worker-shift-list"><Records rows={visible} empty={active === 'Notes' ? 'No saved shift notes or incidents yet.' : 'No assigned shifts found.'} render={shift => <WorkerShiftCard key={shift.id} shift={shift} displayStatus={getDisplayStatus(shift)} client={findClient(shift.participantId)} onStart={() => startShift(shift)} onEnd={() => endShift(shift)} onNotes={payload => saveNotes(shift, payload)} />} /></div>
+      <div className="worker-shift-list">
+        {active === 'Today'
+          ? <Records rows={visible} empty="No assigned shifts found." render={shift => <WorkerShiftCard key={shift.id} shift={shift} displayStatus={getDisplayStatus(shift)} client={findClient(shift.participantId)} onStart={() => startShift(shift)} onEnd={() => endShift(shift)} onNotes={payload => saveNotes(shift, payload)} />} />
+          : active === 'Notes'
+            ? <WorkerNotesByClient shifts={visible} clients={clients} getDisplayStatus={getDisplayStatus} />
+            : <WorkerGroupedShiftList shifts={visible} clients={clients} getDisplayStatus={getDisplayStatus} mode={active} onStart={startShift} onEnd={endShift} onNotes={saveNotes} />}
+      </div>
     </main>
     <nav className="worker-bottom-nav">{[
       ['Today','⌂','Home'],
@@ -2841,13 +2871,15 @@ function WorkerShiftCard({ shift, displayStatus, client, onStart, onEnd, onNotes
       incidentDescription: incident ? incidentDescription.trim() : '',
       incidentAction: incident ? incidentAction.trim() : ''
     };
-    await onNotes(payload);
+    const result = await onNotes(payload);
     setSaving(false);
+    if (result?.ok === false) return alert(result.message || 'Could not submit notes. Please try again.');
     setSaved(true);
     setTimeout(() => setSaved(false), 2400);
   };
+  const startAvailability = canStartShiftNow(shift, now);
   const primaryAction = status === 'Scheduled'
-    ? { label: 'Start Shift', action: onStart, disabled: false }
+    ? { label: startAvailability.ok ? 'Start Shift' : 'Start Locked', action: onStart, disabled: !startAvailability.ok, reason: startAvailability.reason }
     : status === 'In Progress'
       ? { label: 'End Shift', action: onEnd, disabled: false }
       : notesRequired
@@ -2903,9 +2935,83 @@ function WorkerShiftCard({ shift, displayStatus, client, onStart, onEnd, onNotes
     <div className="worker-single-action">
       {primaryAction ? <button className="primary" onClick={primaryAction.action} disabled={primaryAction.disabled}>{primaryAction.label}</button> : <button type="button" disabled>{status === 'Completed' ? 'Shift Completed' : status}</button>}
       {!canShowNotes && canReportIncident && <button type="button" className="ghost" onClick={() => { setIncident(true); setOpen(true); }}>Report Incident</button>}
-      <small>{saved ? 'Saved successfully.' : confirmation}</small>
+      <small>{saved ? 'Saved successfully.' : (primaryAction?.reason && !startAvailability.ok ? primaryAction.reason : confirmation)}</small>
     </div>
   </article>;
+}
+
+function groupWorkerShifts(shifts, mode) {
+  const groups = new Map();
+  const labelFor = (shift) => {
+    if (mode === 'All Shifts') return shift.date || 'Unscheduled';
+    if (mode === 'Month') return shift.date ? `${fmtWeekday(shift.date)}, ${fmt(shift.date)}` : 'Unscheduled';
+    return shift.date ? `${fmtWeekday(shift.date)}, ${fmt(shift.date)}` : 'Unscheduled';
+  };
+  shifts.forEach(shift => {
+    const key = labelFor(shift);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(shift);
+  });
+  return Array.from(groups.entries()).map(([label, rows]) => ({ label, rows }));
+}
+
+function WorkerGroupedShiftList({ shifts = [], clients = [], getDisplayStatus, mode, onStart, onEnd, onNotes }) {
+  const [openGroup, setOpenGroup] = useState('');
+  const [openShift, setOpenShift] = useState('');
+  const groups = groupWorkerShifts(shifts, mode);
+  const findClient = (id) => clients.find(c => c.id === id);
+  if (!shifts.length) return <div className="worker-empty-state">No assigned shifts found.</div>;
+  return <div className="worker-collapsed-groups">
+    {groups.map((group, idx) => {
+      const isOpen = openGroup === group.label || (!openGroup && idx === 0);
+      return <section className="worker-collapse-group" key={group.label}>
+        <button type="button" className="worker-collapse-head" onClick={() => setOpenGroup(isOpen ? '' : group.label)}>
+          <span><b>{group.label}</b><small>{group.rows.length} shift{group.rows.length === 1 ? '' : 's'}</small></span><em>{isOpen ? '−' : '+'}</em>
+        </button>
+        {isOpen && <div className="worker-collapse-body">{group.rows.map(shift => {
+          const client = findClient(shift.participantId);
+          const status = getDisplayStatus(shift);
+          const expanded = openShift === shift.id;
+          return <div className="worker-collapsed-shift" key={shift.id}>
+            <button type="button" className="worker-collapsed-row" onClick={() => setOpenShift(expanded ? '' : shift.id)}>
+              <span><b>{client?.name || shift.participantName || 'Assigned participant'}</b><small>{shift.startTime || '--:--'}–{shift.endTime || '--:--'} · {shift.supportType || 'Support shift'}</small></span>
+              <i className={`worker-status ${String(status).toLowerCase().replace(/\s+/g, '-')}`}>{status}</i>
+            </button>
+            {expanded && <WorkerShiftCard shift={shift} displayStatus={status} client={client} onStart={() => onStart(shift)} onEnd={() => onEnd(shift)} onNotes={payload => onNotes(shift, payload)} />}
+          </div>;
+        })}</div>}
+      </section>;
+    })}
+  </div>;
+}
+
+function WorkerNotesByClient({ shifts = [], clients = [], getDisplayStatus }) {
+  const notedShifts = shifts.filter(s => String(s.notes || '').trim() || String(s.incidentDescription || '').trim());
+  const groups = new Map();
+  notedShifts.forEach(shift => {
+    const client = clients.find(c => c.id === shift.participantId);
+    const key = shift.participantId || shift.participantName || 'unknown';
+    if (!groups.has(key)) groups.set(key, { client, rows: [] });
+    groups.get(key).rows.push(shift);
+  });
+  const [openClient, setOpenClient] = useState('');
+  if (!notedShifts.length) return <div className="worker-empty-state">No saved progress notes or incident reports for your assigned clients yet.</div>;
+  return <div className="worker-notes-groups">
+    {Array.from(groups.entries()).map(([key, group], idx) => {
+      const isOpen = openClient === key || (!openClient && idx === 0);
+      const clientName = group.client?.name || group.rows[0]?.participantName || 'Assigned client';
+      return <section className="worker-collapse-group" key={key}>
+        <button type="button" className="worker-collapse-head" onClick={() => setOpenClient(isOpen ? '' : key)}>
+          <span><b>{clientName}</b><small>{group.rows.length} saved record{group.rows.length === 1 ? '' : 's'}</small></span><em>{isOpen ? '−' : '+'}</em>
+        </button>
+        {isOpen && <div className="worker-note-records">{group.rows.map(shift => <article className="worker-note-record" key={shift.id}>
+          <div><small>{fmt(shift.date)} · {shift.startTime || '--:--'}–{shift.endTime || '--:--'}</small><span className={`worker-status ${String(getDisplayStatus(shift)).toLowerCase().replace(/\s+/g, '-')}`}>{getDisplayStatus(shift)}</span></div>
+          {shift.notes && <p><b>Progress note</b>{shift.notes}</p>}
+          {shift.incidentDescription && <p><b>Incident report</b>{shift.incidentType || 'Incident'} — {shift.incidentDescription}<br/><small>Action: {shift.incidentAction || 'Not recorded'}</small></p>}
+        </article>)}</div>}
+      </section>;
+    })}
+  </div>;
 }
 
 function BusinessOnboarding({ business, onSave, user, onLoadCloud, cloudLoading }) {
