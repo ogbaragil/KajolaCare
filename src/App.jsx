@@ -2798,19 +2798,27 @@ function WorkerPortal({ user, employeeSession, business, worker, workers = [], c
       <button className="ghost" onClick={onSignOut}>Sign out</button>
     </header>
     <main className="worker-main">
-      <section className="worker-hero worker-dashboard-hero">
-        <div><small>Welcome back</small><h1>{matchedWorker?.name || employeeSession?.username || getFirstName(user)}</h1><p>Today first: review your next shift, clock in/out, complete notes and report incidents from one place. Times shown in Melbourne time.</p></div>
-        <div className="worker-hero-card"><span>{todayShifts.length}</span><small>Today</small></div>
-      </section>
-      {nextShift && <section className="worker-next-shift">
-        <div><small>{nextShift.date === today ? "Today's shift" : 'Next shift'}</small><h2>{findClient(nextShift.participantId)?.name || nextShift.participantName || 'Assigned participant'}</h2><p>{fmt(nextShift.date)} · {nextShift.startTime || '--:--'}–{nextShift.endTime || '--:--'} · {nextShift.supportType || 'Support shift'}</p>{nextShift.recurrenceLabel && <span className="recurring-badge">Recurring: {nextShift.recurrenceLabel}</span>}</div>
-        <button className="primary" disabled={getDisplayStatus(nextShift) !== 'Scheduled' || !nextShiftStart.ok} title={nextShiftStart.reason} onClick={() => startShift(nextShift)}>{nextShiftStart.ok ? 'Start Shift' : 'Start Locked'}</button>
+      {active === 'Today' ? <>
+        <section className="worker-hero worker-dashboard-hero">
+          <div><small>Welcome back</small><h1>{matchedWorker?.name || employeeSession?.username || getFirstName(user)}</h1><p>Today first: review your next shift, clock in/out, complete notes and report incidents from one place. Times shown in Melbourne time.</p></div>
+          <div className="worker-hero-card"><span>{todayShifts.length}</span><small>Today</small></div>
+        </section>
+        {nextShift && <section className="worker-next-shift">
+          <div><small>{nextShift.date === today ? "Today's shift" : 'Next shift'}</small><h2>{findClient(nextShift.participantId)?.name || nextShift.participantName || 'Assigned participant'}</h2><p>{fmt(nextShift.date)} · {nextShift.startTime || '--:--'}–{nextShift.endTime || '--:--'} · {nextShift.supportType || 'Support shift'}</p>{nextShift.recurrenceLabel && <span className="recurring-badge">Recurring: {nextShift.recurrenceLabel}</span>}</div>
+          <button className="primary" disabled={getDisplayStatus(nextShift) !== 'Scheduled' || !nextShiftStart.ok} title={nextShiftStart.reason} onClick={() => startShift(nextShift)}>{nextShiftStart.ok ? 'Start Shift' : 'Start Locked'}</button>
+        </section>}
+        <section className="worker-summary-grid">
+          <div><small>Today</small><b>{todayShifts.length}</b></div>
+          <div><small>In progress</small><b>{inProgress}</b></div>
+          <div><small>Completed</small><b>{completed}</b></div>
+        </section>
+      </> : <section className="worker-view-heading">
+        <div>
+          <small>{active === 'All Shifts' ? 'All shifts' : active}</small>
+          <h1>{active === 'Week' ? 'This Week' : active === 'Month' ? 'This Month' : active === 'Notes' ? 'Client Notes' : 'All Shifts'}</h1>
+          <p>{active === 'Week' ? 'Your roster grouped by day. Tap a day to expand shifts.' : active === 'Month' ? 'Your monthly roster grouped by date. Tap a group to expand.' : active === 'Notes' ? 'Progress notes and incident reports grouped by assigned clients only.' : 'Searchable shift history grouped by date.'}</p>
+        </div>
       </section>}
-      <section className="worker-summary-grid">
-        <div><small>Today</small><b>{todayShifts.length}</b></div>
-        <div><small>In progress</small><b>{inProgress}</b></div>
-        <div><small>Completed</small><b>{completed}</b></div>
-      </section>
       {!matchedWorker && <div className="worker-notice"><b>Employee Profile Not Found</b><span>Your account is not yet linked to an employee record. Ask an admin to create or enable your employee username under Compliance &gt; Employees before assigning shifts.</span></div>}
       {matchedWorker && workerShifts.length === 0 && <div className="worker-notice"><b>No assigned shifts yet</b><span>Your employee profile is active, but no client shifts have been assigned to you yet.</span></div>}
       {portalMessage && <div className="worker-notice"><b>Sync notice</b><span>{portalMessage}</span></div>}
