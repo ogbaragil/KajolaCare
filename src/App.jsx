@@ -696,6 +696,7 @@ export default function App() {
   };
 
   const saveInvoice = () => {
+    const safeInvoiceList = Array.isArray(invoices) ? invoices.filter(i => i && typeof i === 'object') : [];
     const client = clients.find(c => c.id === invoiceForm.clientId && !c.archived);
     if (!client) return alert('Please select an active client.');
     const lines = invoiceForm.lines.map(l => ({ ...l, itemCode: l.itemCode || '', itemLabel: l.itemLabel || '', unitType: l.unitType || 'Hour', quantity: Number(l.quantity), rate: Number(l.rate), notes: l.notes || '', lineTotal: Number(l.quantity) * Number(l.rate) }));
@@ -719,7 +720,7 @@ export default function App() {
     };
     let savedInvoice;
     if (editingInvoice) {
-      const current = invoices.find(inv => inv.id === editingInvoice);
+      const current = safeInvoiceList.find(inv => inv.id === editingInvoice);
       savedInvoice = { ...current, ...baseInvoice, status: normaliseInvoiceStatus(current?.status), statusHistory: current?.statusHistory || [] };
       setInvoices(prev => prev.map(inv => inv.id === editingInvoice ? savedInvoice : inv));
       if (['Pending', 'Paid'].includes(normaliseInvoiceStatus(savedInvoice.status))) {
@@ -727,7 +728,7 @@ export default function App() {
       }
     } else {
       const stamp = todayISO().replace(/-/g, '');
-      const next = safeInvoices.filter(i => String(i.invoiceNumber).startsWith(`INV-${stamp}-`)).length + 1;
+      const next = safeInvoiceList.filter(i => String(i.invoiceNumber).startsWith(`INV-${stamp}-`)).length + 1;
       savedInvoice = {
         id: makeId('invoice'),
         invoiceNumber: `INV-${stamp}-${String(next).padStart(3, '0')}`,
